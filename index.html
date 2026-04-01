@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>M is for Maps (and also Michaela) ❤️</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css"/>
+
+  <style>
+    body { margin:0; font-family:sans-serif; }
+
+    #counter { padding:10px; background:#f4f4f4; text-align:center; font-weight:bold; }
+
+    #progressContainer { height:12px; background:#ddd; }
+    #progressBar { height:100%; width:0%; background:#4caf50; transition:0.3s; }
+
+    #map { height:calc(100vh - 62px); }
+
+    button {
+      cursor:pointer;
+      border:none;
+      border-radius:4px;
+      padding:6px 10px;
+      background:#4caf50;
+      color:white;
+      margin-top: 5px;
+    }
+
+    button:hover { background:#45a049; }
+
+    #statsPanel {
+      position:absolute;
+      top:70px;
+      right:10px;
+      background:white;
+      padding:10px;
+      display:none;
+      z-index:1000;
+      box-shadow:0 0 10px rgba(0,0,0,0.3);
+      border-radius: 6px;
+    }
+
+    /* ICONS */
+    .ikea-icon {
+      transition: filter 0.4s ease, transform 0.2s ease;
+      filter: grayscale(100%);
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .ikea-icon.visited {
+      filter: grayscale(0%) drop-shadow(0 0 6px rgba(0,150,255,0.6));
+    }
+
+    .ikea-icon-container {
+      background: transparent;
+      border: none;
+    }
+    
+    .ikea-icon-container:hover .ikea-icon { transform: scale(1.1); }
+
+    /* ADD FORM */
+    #formOverlay {
+      position:fixed;
+      top:0; left:0;
+      width:100%; height:100%;
+      background:rgba(0,0,0,0.5);
+      display:none;
+      justify-content:center;
+      align-items:center;
+      z-index:2000;
+    }
+
+    #formBox {
+      background:white;
+      padding:20px;
+      border-radius:10px;
+      width:250px;
+    }
+
+    input, select {
+      width:100%;
+      margin-bottom:10px;
+      padding:5px;
+      box-sizing: border-box;
+    }
+  </style>
+</head>
+
+<body>
+
+<div id="counter"></div>
+<div id="progressContainer"><div id="progressBar"></div></div>
+<div id="map"></div>
+
+<button onclick="toggleStatsPanel()" style="position:absolute; top:10px; right:10px; z-index:1000;">Stats</button>
+<button onclick="enableAddMode()" style="position:absolute; top:10px; left:10px; z-index:1000;">➕ Add Place</button>
+
+<div id="statsPanel"></div>
+
+<div id="formOverlay">
+  <div id="formBox">
+    <h3>Add Place</h3>
+    <input id="placeName" placeholder="Place name"/>
+    <select id="placeType">
+      <option value="date">💕 Date</option>
+      <option value="visited">📍 Visited</option>
+    </select>
+    <button onclick="savePlace()">Save</button>
+    <button onclick="closeForm()">Cancel</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.markercluster/dist/leaflet.markercluster.js"></script>
+
+<script>
+var map = L.map('map').setView([52.2,5.5],7);
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution:'&copy; OpenStreetMap &copy; CARTO'
+}).addTo(map);
+
+// Define markers cluster group BEFORE adding markers to it
+var markers = L.markerClusterGroup({
+  showCoverageOnHover: false,
+  spiderfyOnMaxZoom: false,
+  disableClusteringAtZoom: 10,
+  iconCreateFunction: function(cluster) {
+    // 1. Get all markers inside this specific cluster
+    const childMarkers = cluster.getAllChildMarkers();
+    
+    // 2. Check if EVERY marker in this cluster is visited
+    // We check the locId against our isVisited() function
+    const allVisited = childMarkers.every(m => isVisited(m.locId));
+
+    // 3. Apply the grayscale filter if not all are visited
+    const clusterStyle = allVisited 
+      ? "filter: grayscale(0%) drop-shadow(0 0 6px rgba(0,150,255,0.6));" 
+      : "filter: grayscale(100%); opacity: 0.8;";
+
+    return L.divIcon({
+      html: `<div style="position:relative; ${clusterStyle}">
+               <img src="https://upload.wikimedia.org/wikipedia/commons/c/c5/Ikea_logo.svg" style="width:40px;">
+               <div style="position:absolute; top:-8px; right:-12px; background:${allVisited ? '#4caf50' : '#888'}; color:white; border-radius:50%; width:20px; height:20px; text-align:center; font-size:12px; line-height:20px; font-weight:bold;">
+                 ${cluster.getChildCount()}
+               </div>
+             </div>`,
+      className: '',
+      iconSize: [40, 40]
+    });
+  }
+});
+map.addLayer(markers);
+
+// -------- IKEA LOCATIONS --------
+const ikeaLocations = [
+  { id: "ikea-utrecht", name: "IKEA Utrecht", lat: 52.0907, lng: 5.1214, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-amsterdam", name: "IKEA Amsterdam", lat: 52.3546, lng: 4.9410, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-rotterdam", name: "IKEA Rotterdam", lat: 51.9244, lng: 4.4777, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-heerlen", name: "IKEA Heerlen", lat: 50.8994, lng: 5.9452, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-eindhoven", name: "IKEA Eindhoven", lat: 51.4988, lng: 5.4708, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-breda", name: "IKEA Breda", lat: 51.5803, lng: 4.7291, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-duiven", name: "IKEA Duiven", lat: 51.9663, lng: 5.9968, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-delft", name: "IKEA Delft", lat: 52.0124, lng: 4.3799, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-amersfoort", name: "IKEA Amersfoort", lat: 52.1871, lng: 5.4146, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-hengelo", name: "IKEA Hengelo", lat: 52.2877, lng: 6.7653, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-haarlem", name: "IKEA Haarlem", lat: 52.3850, lng: 4.6708, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-zwolle", name: "IKEA Zwolle", lat: 52.5322, lng: 6.1645, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-groningen", name: "IKEA Groningen", lat: 53.2184, lng: 6.5896, continent: "Europe", country: "Netherlands" },
+  { id: "ikea-gallerian", name: "IKEA Gallerian (Stockholm)", lat: 59.3303, lng: 18.0676, continent: "Europe", country: "Sweden" },
+  { id: "ikea-kallered", name: "IKEA Kållered", lat: 57.6059, lng: 12.0468, continent: "Europe", country: "Sweden" },
+  { id: "ikea-karlstad", name: "IKEA Karlstad", lat: 59.3788, lng: 13.4185, continent: "Europe", country: "Sweden" },
+  { id: "ikea-kalmar", name: "IKEA Kalmar", lat: 56.6850, lng: 16.3162, continent: "Europe", country: "Sweden" },
+  { id: "ikea-birsta", name: "IKEA Birsta (Sundsvall)", lat: 62.4456, lng: 17.3352, continent: "Europe", country: "Sweden" },
+  { id: "ikea-Helsingborg", name: "IKEA Helsingborg", lat: 56.0920, lng: 12.7604, continent: "Europe", country: "Sweden" },
+  { id: "ikea-Malmo", name: "IKEA Malmö", lat: 55.5526, lng: 12.9850, continent: "Europe", country: "Sweden" },
+  { id: "ikea-umea", name: "IKEA Umeå", lat: 63.8085, lng: 20.2541, continent: "Europe", country: "Sweden" },
+  { id: "ikea-Goteborg", name: "IKEA Göteborg", lat: 57.7744, lng: 12.0018, continent: "Europe", country: "Sweden" },
+  { id: "ikea-almhult", name: "IKEA Älmhult", lat: 56.5497, lng: 14.1637, continent: "Europe", country: "Sweden" },
+  { id: "ikea-borlange", name: "IKEA Borlänge", lat: 60.4815, lng: 15.4198, continent: "Europe", country: "Sweden" },
+  { id: "ikea-gavle", name: "IKEA Gävle", lat: 60.6339, lng: 16.9898, continent: "Europe", country: "Sweden" },
+  { id: "ikea-jonkoping", name: "IKEA Jönköping", lat: 57.7719, lng: 14.2038, continent: "Europe", country: "Sweden" },
+  { id: "ikea-orebro", name: "IKEA Örebro", lat: 59.2127, lng: 15.1359, continent: "Europe", country: "Sweden" },
+  { id: "ikea-mos", name: "IKEA MoS (Stockholm)", lat: 59.3704, lng: 18.0037, continent: "Europe", country: "Sweden" },
+  { id: "ikea-uppsala", name: "IKEA Uppsala", lat: 59.8440, lng: 17.6956, continent: "Europe", country: "Sweden" },
+  { id: "ikea-uddevalla", name: "IKEA Uddevalla", lat: 58.3560, lng: 11.8176, continent: "Europe", country: "Sweden" },
+  { id: "ikea-vasteras", name: "IKEA Västerås", lat: 59.6078, lng: 16.4570, continent: "Europe", country: "Sweden" },
+  { id: "ikea-barkarby", name: "IKEA Barkarby (Stockholm)", lat: 59.4208, lng: 17.8581, continent: "Europe", country: "Sweden" },
+  { id: "ikea-linkoping", name: "IKEA Linköping", lat: 58.4333, lng: 15.5867, continent: "Europe", country: "Sweden" },
+  { id: "ikea-kungens-kurva", name: "IKEA Kungens Kurva (Stockholm)", lat: 59.2707, lng: 17.9173, continent: "Europe", country: "Sweden" },
+  { id: "ikea-zlicin", name: "IKEA Zličín (Praha)", lat: 50.0510, lng: 14.2983, continent: "Europe", country: "Czech Republic" },
+  { id: "ikea-ostrava", name: "IKEA Ostrava", lat: 49.7991, lng: 18.2277, continent: "Europe", country: "Czech Republic" },
+  { id: "ikea-cerny-most", name: "IKEA Černý Most (Praha)", lat: 50.1043, lng: 14.5873, continent: "Europe", country: "Czech Republic" },
+  { id: "ikea-brno", name: "IKEA Brno", lat: 49.1555, lng: 16.6274, continent: "Europe", country: "Czech Republic" },
+  { id: "ikea-bielsko-biala", name: "IKEA Bielsko Biała", lat: 49.8029, lng: 19.0508, continent: "Europe", country: "Poland" },
+  { id: "ikea-janki", name: "IKEA Janki", lat: 52.1331, lng: 20.8958, continent: "Europe", country: "Poland" },
+  { id: "ikea-gdansk", name: "IKEA Gdańsk", lat: 54.3740, lng: 18.5170, continent: "Europe", country: "Poland" },
+  { id: "ikea-krakow", name: "IKEA Kraków", lat: 50.0894, lng: 19.8976, continent: "Europe", country: "Poland" },
+  { id: "ikea-poznan", name: "IKEA Poznań", lat: 52.3828, lng: 16.9875, continent: "Europe", country: "Poland" },
+  { id: "ikea-wroclaw", name: "IKEA Wrocław", lat: 51.0472, lng: 16.9553, continent: "Europe", country: "Poland" },
+  { id: "ikea-katowice", name: "IKEA Katowice", lat: 50.2712, lng: 19.0604, continent: "Europe", country: "Poland" },
+  { id: "ikea-targowek", name: "IKEA Targówek (Warszawa)", lat: 52.3063, lng: 21.0828, continent: "Europe", country: "Poland" },
+  { id: "ikea-lublin", name: "IKEA Lublin", lat: 51.2817, lng: 22.5742, continent: "Europe", country: "Poland" },
+  { id: "ikea-lodz", name: "IKEA Łódź", lat: 51.7015, lng: 19.4120, continent: "Europe", country: "Poland" },
+  { id: "ikea-bydgoszcz", name: "IKEA Bydgoszcz", lat: 53.1324, lng: 18.1194, continent: "Europe", country: "Poland" },
+  { id: "ikea-szczecin", name: "IKEA Szczecin", lat: 53.4075, lng: 14.5140, continent: "Europe", country: "Poland" },
+  { id: "ikea-ghent", name: "IKEA Ghent", lat: 51.0222, lng: 3.6880, continent: "Europe", country: "Belgium" },
+  { id: "ikea-antwerpen", name: "IKEA Antwerpen", lat: 51.1576, lng: 4.3835, continent: "Europe", country: "Belgium" },
+  { id: "ikea-liege", name: "IKEA Liège", lat: 50.6788, lng: 5.4647, continent: "Europe", country: "Belgium" },
+  { id: "ikea-zaventem", name: "IKEA Zaventem (Brussels)", lat: 50.8723, lng: 4.4912, continent: "Europe", country: "Belgium" },
+  { id: "ikea-mons", name: "IKEA Mons", lat: 50.4560, lng: 3.9304, continent: "Europe", country: "Belgium" },
+  { id: "ikea-hasselt", name: "IKEA Hasselt", lat: 50.9190, lng: 5.3151, continent: "Europe", country: "Belgium" },
+  { id: "ikea-anderlecht", name: "IKEA Anderlecht (Brussels)", lat: 50.8103, lng: 4.2916, continent: "Europe", country: "Belgium" },
+  { id: "ikea-arlon", name: "IKEA Arlon", lat: 49.6371, lng: 5.8905, continent: "Europe", country: "Belgium" },
+  { id: "ikea-tampere", name: "IKEA Tampere", lat: 61.4510, lng: 23.7704, continent: "Europe", country: "Finland" },
+  { id: "ikea-espoo", name: "IKEA Espoo", lat: 60.2177, lng: 24.6627, continent: "Europe", country: "Finland" },
+  { id: "ikea-kuopio", name: "IKEA Kuopio", lat: 62.8246, lng: 27.6050, continent: "Europe", country: "Finland" },
+  { id: "ikea-raisio", name: "IKEA Raisio (Turku)", lat: 60.4943, lng: 22.2277, continent: "Europe", country: "Finland" },
+  { id: "ikea-vantaa", name: "IKEA Vantaa", lat: 60.2762, lng: 25.0843, continent: "Europe", country: "Finland" },
+  { id: "ikea-haparanda", name: "IKEA Haparanda", lat: 65.8429, lng: 24.1316, continent: "Europe", country: "Finland" },
+  { id: "ikea-kristiansand", name: "IKEA Kristiansand", lat: 58.1873, lng: 8.1584, continent: "Europe", country: "Norway" },
+  { id: "ikea-slependen", name: "IKEA Slependen (Oslo)", lat: 59.8739, lng: 10.4974, continent: "Europe", country: "Norway" },
+  { id: "ikea-furuset", name: "IKEA Furuset (Oslo)", lat: 59.9338, lng: 10.8731, continent: "Europe", country: "Norway" },
+  { id: "ikea-sandes", name: "IKEA Sandes", lat: 58.8867, lng: 5.7212, continent: "Europe", country: "Norway" },
+  { id: "ikea-trondheim", name: "IKEA Trondheim", lat: 63.4286, lng: 10.4738, continent: "Europe", country: "Norway" },
+  { id: "ikea-ringsaker", name: "IKEA Ringsaker", lat: 60.8402, lng: 11.0575, continent: "Europe", country: "Norway" },
+  { id: "ikea-bergen", name: "IKEA Bergen", lat: 60.4761, lng: 5.3320, continent: "Europe", country: "Norway" },
+  { id: "ikea-stortorvet", name: "IKEA Oslo", lat: 59.9127, lng: 10.7438, continent: "Europe", country: "Norway" },
+  { id: "ikea-karlsruhe", name: "IKEA Karlsruhe", lat: 49.0048, lng: 8.4420, continent: "Europe", country: "Germany" },
+  { id: "ikea-magdeburg", name: "IKEA Magdeburg", lat: 52.1688, lng: 11.6115, continent: "Europe", country: "Germany" },
+  { id: "ikea-karst", name: "IKEA Karst", lat: 51.2113, lng: 6.6403, continent: "Europe", country: "Germany" },
+  { id: "ikea-wetzlar", name: "IKEA Wetzlar", lat: 50.5689, lng: 8.4974, continent: "Europe", country: "Germany" },
+  { id: "ikea-eching", name: "IKEA Eching", lat: 48.3045, lng: 11.6342, continent: "Europe", country: "Germany" },
+  { id: "ikea-augsburg", name: "IKEA Augsburg", lat: 48.4047, lng: 10.8713, continent: "Europe", country: "Germany" },
+  { id: "ikea-oldenburg", name: "IKEA Oldenburg", lat: 53.1401, lng: 8.2549, continent: "Europe", country: "Germany" },
+  { id: "ikea-walldorf", name: "IKEA Walldorf", lat: 49.3055, lng: 8.6293, continent: "Europe", country: "Germany" },
+  { id: "ikea-rostock", name: "IKEA Rostock", lat: 54.1086, lng: 12.0516, continent: "Europe", country: "Germany" },
+  { id: "ikea-butzweilerhof", name: "IKEA Butzweilerhof (Köln)", lat: 50.9849, lng: 6.8966, continent: "Europe", country: "Germany" },
+  { id: "ikea-braunschweig", name: "IKEA Braunschweig", lat: 52.3090, lng: 10.5045, continent: "Europe", country: "Germany" },
+  { id: "ikea-chemnitz", name: "IKEA Chemnitz", lat: 50.8023, lng: 12.8597, continent: "Europe", country: "Germany" },
+  { id: "ikea-bielefeld", name: "IKEA Bielefeld", lat: 51.9821, lng: 8.4922, continent: "Europe", country: "Germany" },
+  { id: "ikea-wurzburg", name: "IKEA Würzburg", lat: 49.8221, lng: 9.9835, continent: "Europe", country: "Germany" },
+  { id: "ikea-waltersdorf", name: "IKEA Waltersdorf (Berlin)", lat: 52.3668, lng: 13.5558, continent: "Europe", country: "Germany" },
+  { id: "ikea-leipzig", name: "IKEA Leipzig", lat: 51.3486, lng: 12.1831, continent: "Europe", country: "Germany" },
+  { id: "ikea-schnelsen", name: "IKEA Schnelsen (Hamburg)", lat: 53.6488, lng: 9.9274, continent: "Europe", country: "Germany" },
+  { id: "ikea-godorf", name: "IKEA Godorf (Köln)", lat: 50.8615, lng: 6.9710, continent: "Europe", country: "Germany" },
+  { id: "ikea-essen", name: "IKEA Essen", lat: 51.4603, lng: 7.0009, continent: "Europe", country: "Germany" },
+  { id: "ikea-kassel", name: "IKEA Kassel", lat: 51.2776, lng: 9.5255, continent: "Europe", country: "Germany" },
+  { id: "ikea-osnabruck", name: "IKEA Osnabrück", lat: 52.2632, lng: 7.9714, continent: "Europe", country: "Germany" },
+  { id: "ikea-messe", name: "IKEA Messe (Hannover)", lat: 52.3137, lng: 9.8169, continent: "Europe", country: "Germany" },
+  { id: "ikea-dresden", name: "IKEA Dresden", lat: 51.0864, lng: 13.6943, continent: "Europe", country: "Germany" },
+  { id: "ikea-hanau", name: "IKEA Hannau (Frankfurt)", lat: 50.1496, lng: 8.9424, continent: "Europe", country: "Germany" },
+  { id: "ikea-dortmund", name: "IKEA Dortmund", lat: 51.4911, lng: 7.3694, continent: "Europe", country: "Germany" },
+  { id: "ikea-sindelfingen", name: "IKEA Sindelfingen", lat: 48.7014, lng: 9.0054, continent: "Europe", country: "Germany" },
+  { id: "ikea-ludwigsburg", name: "IKEA Ludwigsburg", lat: 48.9180, lng: 9.1539, continent: "Europe", country: "Germany" },
+  { id: "ikea-burgwedel", name: "IKEA Burgwedel (Hannover)", lat: 52.4921, lng: 9.8377, continent: "Europe", country: "Germany" },
+  { id: "ikea-saarbrucken", name: "IKEA Saarbrücken", lat: 49.2933, lng: 6.7606, continent: "Europe", country: "Germany" },
+  { id: "ikea-bremen", name: "IKEA Bremen", lat: 53.0264, lng: 8.8036, continent: "Europe", country: "Germany" },
+  { id: "ikea-regensburg", name: "IKEA Regensburg", lat: 49.0017, lng: 12.1777, continent: "Europe", country: "Germany" },
+  { id: "ikea-altona", name: "IKEA Altona (Hamburg)", lat: 53.5516, lng: 9.9416, continent: "Europe", country: "Germany" },
+  { id: "ikea-lubeck", name: "IKEA Lübeck", lat: 53.9120, lng: 10.7349, continent: "Europe", country: "Germany" },
+  { id: "ikea-freiburg", name: "IKEA Freiburg", lat: 48.0286, lng: 7.8328, continent: "Europe", country: "Germany" },
+  { id: "ikea-dusseldorf", name: "IKEA Düsseldorf", lat: 51.1875, lng: 6.8489, continent: "Europe", country: "Germany" },
+  { id: "ikea-wiesbaden", name: "IKEA Wiesbaden", lat: 50.0580, lng: 8.3717, continent: "Europe", country: "Germany" },
+  { id: "ikea-kamen", name: "IKEA Kamen", lat: 51.5693, lng: 7.6692, continent: "Europe", country: "Germany" },
+  { id: "ikea-lichtenberg", name: "IKEA Lichtenberg", lat: 52.5339, lng: 13.5143, continent: "Europe", country: "Germany" },
+  { id: "ikea-moorfleet", name: "IKEA Moorfleet (Hamburg)", lat: 53.5111, lng: 10.0922, continent: "Europe", country: "Germany" },
+  { id: "ikea-furth", name: "IKEA Fürth", lat: 49.4854, lng: 11.0097, continent: "Europe", country: "Germany" },
+  { id: "ikea-ulm", name: "IKEA Ulm", lat: 48.4040, lng: 9.9769, continent: "Europe", country: "Germany" },
+  { id: "ikea-koblenz", name: "IKEA Koblenz", lat: 50.3823, lng: 7.5678, continent: "Europe", country: "Germany" },
+  { id: "ikea-kiel", name: "IKEA Kiel", lat: 54.3138, lng: 10.1073, continent: "Europe", country: "Germany" },
+  { id: "ikea-taufkirchen", name: "IKEA Taufkirchen", lat: 48.0404, lng: 11.6580, continent: "Europe", country: "Germany" },
+  { id: "ikea-siegen", name: "IKEA Siegen", lat: 50.8626, lng: 8.0021, continent: "Europe", country: "Germany" },
+  { id: "ikea-niedereschbach", name: "IKEA Niedereschbach", lat: 50.1958, lng: 8.6570, continent: "Europe", country: "Germany" },
+  { id: "ikea-spandau", name: "IKEA Spandau (Berlin)", lat: 52.5281, lng: 13.2146, continent: "Europe", country: "Germany" },
+  { id: "ikea-erfurt", name: "IKEA Erfurt", lat: 50.9595, lng: 10.9490, continent: "Europe", country: "Germany" },
+  { id: "ikea-mannheim", name: "IKEA Mannheim", lat: 49.5558, lng: 8.4438, continent: "Europe", country: "Germany" },
+  { id: "ikea-bremerhaven", name: "IKEA Bremerhaven", lat: 53.4890, lng: 8.6055, continent: "Europe", country: "Germany" },
+  { id: "ikea-tempelhof", name: "IKEA Tempelhof (Berlin)", lat: 52.4695, lng: 13.3662, continent: "Europe", country: "Germany" },
+  { id: "ikea-duisburg", name: "IKEA Duidburg", lat: 51.4821, lng: 6.7638, continent: "Europe", country: "Germany" },
+  { id: "ikea-kaiserslautern", name: "IKEA Kaiserslautern", lat: 49.4404, lng: 7.7011, continent: "Europe", country: "Germany" },
+  { id: "ikea-wuppertal", name: "IKEA Wuppertal", lat: 51.3098, lng: 7.2557, continent: "Europe", country: "Germany" },
+  { id: "ikea-alborg", name: "IKEA Ålborg", lat: 56.9962, lng: 9.8653, continent: "Europe", country: "Denmark" },
+  { id: "ikea-tastrup", name: "IKEA Tåstrup (Copenhagen)", lat: 55.6593, lng: 12.2865, continent: "Europe", country: "Denmark" },
+  { id: "ikea-gentofte", name: "IKEA Gentofte (Copenhagen)", lat: 55.7534, lng: 12.5205, continent: "Europe", country: "Denmark" },
+  { id: "ikea-Odense", name: "IKEA Odense", lat: 55.3805, lng: 10.4297, continent: "Europe", country: "Denmark" },
+  { id: "ikea-arhus", name: "IKEA Århus", lat: 56.2031, lng: 10.1810, continent: "Europe", country: "Denmark" },
+  { id: "ikea-dybboelsbro", name: "IKEA Dybboelsbro (Copenhagen)", lat: 55.6639, lng: 12.5613, continent: "Europe", country: "Denmark" },
+];
+
+// Set IKEA categories
+ikeaLocations.forEach(loc => loc.category = "ikea");
+
+// -------- GLOBAL LIST --------
+let locations = [...ikeaLocations];
+
+// -------- STORAGE --------
+function isVisited(id){ return localStorage.getItem(id)==='true'; }
+
+// -------- ICONS --------
+function getIcon(loc){
+  // For custom non-IKEA places, we use cute emojis!
+  if (loc.category && loc.category !== "ikea") {
+    const emoji = loc.category === "date" ? "💕" : "📍";
+    return L.divIcon({
+      html: `<div style="font-size:24px; text-align:center; filter:drop-shadow(0px 2px 2px rgba(0,0,0,0.5));">${emoji}</div>`,
+      className: '',
+      iconSize: [30,30],
+      iconAnchor: [15,30]
+    });
+  }
+
+  // For IKEA, we use your CSS filter logic applied to a public SVG logo!
+  const visited = isVisited(loc.id);
+  const cssClass = visited ? "ikea-icon visited" : "ikea-icon";
+  
+  return L.divIcon({
+    html: `<img src="https://upload.wikimedia.org/wikipedia/commons/c/c5/Ikea_logo.svg" class="${cssClass}">`,
+    className: 'ikea-icon-container',
+    iconSize: [50, 20],
+    iconAnchor: [25, 10]
+  });
+}
+
+function saveCustomPlaces(){
+  const custom = locations
+    .filter(l => l.category && l.category !== "ikea")
+    .map(l => ({
+      id: l.id,
+      name: l.name,
+      lat: l.lat,
+      lng: l.lng,
+      category: l.category,
+      continent: l.continent,
+      country: l.country
+    }));
+
+  localStorage.setItem("customPlaces", JSON.stringify(custom));
+}
+
+function loadCustomPlaces(){
+  const saved = JSON.parse(localStorage.getItem("customPlaces")||"[]");
+  locations.push(...saved);
+}
+
+// -------- MARKERS --------
+function addMarker(loc){
+  const marker = L.marker([loc.lat,loc.lng],{
+    icon: getIcon(loc), 
+    draggable: loc.category !== "ikea"
+  });
+
+  marker.locId = loc.id;
+  marker.bindPopup(createPopup(loc));
+
+  marker.on('dragend', function(e){
+    const pos = e.target.getLatLng();
+    loc.lat = pos.lat;
+    loc.lng = pos.lng;
+    saveCustomPlaces();
+  });
+
+  loc.marker = marker;
+  if (loc.category === "ikea") {
+    markers.addLayer(marker); // Cluster the IKEAs
+  } else {
+    map.addLayer(marker);     // Put custom places straight on the map!
+  }
+}
+
+// -------- POPUP --------
+function createPopup(loc){
+  // CUSTOM PLACES (editable UI)
+  if(loc.category === "date" || loc.category === "visited"){
+    return `
+      <div style="min-width:180px">
+        <input id="edit-name-${loc.id}" value="${loc.name}" style="width:100%; margin-bottom:5px;"/>
+
+        <select id="edit-type-${loc.id}" style="width:100%; margin-bottom:5px;">
+          <option value="date" ${loc.category==="date"?"selected":""}>💕 Date</option>
+          <option value="visited" ${loc.category==="visited"?"selected":""}>📍 Visited</option>
+        </select>
+
+        <button onclick="saveEdit('${loc.id}')">💾 Save</button>
+        <button onclick="removePlace('${loc.id}')" style="background:#dc3545;">🗑</button>
+      </div>
+    `;
+  }
+
+  // IKEA stays same
+  if(isVisited(loc.id)){
+    return `<div style="text-align:center;"><b>${loc.name}</b><br>✅ Visited<br>
+      <button onclick="toggleVisited('${loc.id}')">Unmark</button></div>`;
+  }
+
+  return `<div style="text-align:center;"><b>${loc.name}</b><br>
+    <button onclick="toggleVisited('${loc.id}')">Mark visited</button></div>`;
+}
+
+function saveEdit(id){
+  const loc = locations.find(l => l.id === id);
+  if(!loc) return;
+
+  const newName = document.getElementById(`edit-name-${id}`).value;
+  const newType = document.getElementById(`edit-type-${id}`).value;
+
+  if(!newName){
+    alert("Name cannot be empty");
+    return;
+  }
+
+  // Update data
+  loc.name = newName;
+  loc.category = newType;
+
+  // Update marker icon + popup
+  loc.marker.setIcon(getIcon(loc));
+  loc.marker.setPopupContent(createPopup(loc));
+
+  saveCustomPlaces();
+  updateAll();
+  loc.marker.closePopup();
+}
+
+function removePlace(id){
+  if(!confirm("Remove this place?")) return;
+
+  const index = locations.findIndex(l => l.id === id);
+  if(index === -1) return;
+
+  const loc = locations[index];
+
+  if (loc.category === "ikea") {
+    markers.removeLayer(loc.marker);
+  } else {
+    map.removeLayer(loc.marker);
+  }
+
+  locations.splice(index, 1);
+
+  saveCustomPlaces();
+  updateAll();
+}
+
+// -------- TOGGLE IKEA --------
+function toggleVisited(id){
+  if(isVisited(id)){
+    localStorage.removeItem(id);
+  } else {
+    localStorage.setItem(id, "true");
+  }
+
+  // INSTED OF CLEARING ALL LAYERS, we just update the specific marker that was clicked!
+  const loc = locations.find(l => l.id === id);
+  if(loc && loc.marker) {
+    loc.marker.setIcon(getIcon(loc));
+    loc.marker.setPopupContent(createPopup(loc));
+    markers.refreshClusters(loc.marker);
+  }
+
+  updateAll();
+}
+
+// -------- COUNTER --------
+function updateAll(){
+  const visited = ikeaLocations.filter(l => isVisited(l.id)).length;
+
+  document.getElementById('counter').textContent =
+    `Visited IKEA: ${visited}/${ikeaLocations.length}`;
+
+  document.getElementById('progressBar').style.width =
+    (visited/ikeaLocations.length*100)+'%';
+
+  updateStatsPanel(); 
+}
+
+// -------- STATS --------
+function toggleStatsPanel(){
+  const p=document.getElementById('statsPanel');
+  p.style.display=p.style.display==='none'?'block':'none';
+}
+
+function updateStatsPanel(){
+  const visitedLocations = ikeaLocations.filter(l => isVisited(l.id));
+
+  const continentsVisited = {};
+  const countriesVisited = {};
+
+  visitedLocations.forEach(l => {
+    if(!l.continent || !l.country) return;
+
+    continentsVisited[l.continent] = (continentsVisited[l.continent] || 0) + 1;
+    countriesVisited[l.country] = (countriesVisited[l.country] || 0) + 1;
+  });
+
+  let html = "";
+
+  html += `<strong>Total Continents Visited:</strong> ${Object.keys(continentsVisited).length}<br>`;
+  html += `<strong>Total Countries Visited:</strong> ${Object.keys(countriesVisited).length}<br><br>`;
+
+  html += `<strong>Visited per Continent:</strong><br>`;
+  for(const [c,count] of Object.entries(continentsVisited)){
+    html += `${c}: ${count}<br>`;
+  }
+
+  html += `<br><strong>Visited per Country:</strong><br>`;
+  for(const [c,count] of Object.entries(countriesVisited)){
+    html += `${c}: ${count}<br>`;
+  }
+
+  document.getElementById('statsPanel').innerHTML = html;
+}
+
+// -------- ADD MODE --------
+let addMode=false;
+let clickedLatLng=null;
+
+function enableAddMode(){
+  alert("Click on the map to add a place");
+  addMode=true;
+}
+
+map.on('click', function(e){
+  if(!addMode) return;
+
+  clickedLatLng = e.latlng;
+
+  document.getElementById('formOverlay').style.display='flex';
+  addMode=false;
+});
+
+
+// -------- FORM --------
+function closeForm(){
+  document.getElementById('formOverlay').style.display='none';
+}
+
+function savePlace(){
+  const name = document.getElementById('placeName').value;
+  const type = document.getElementById('placeType').value;
+
+  if(!name){
+    alert("Enter a name!");
+    return;
+  }
+
+  if(!clickedLatLng){
+    alert("Click on the map first!");
+    return;
+  }
+
+  const newPlace = {
+    id: type + "-" + Date.now(),
+    name: name,
+    lat: clickedLatLng.lat,
+    lng: clickedLatLng.lng,
+    category: type,
+    continent: "Unknown",
+    country: "Unknown"
+  };
+
+  locations.push(newPlace);
+
+  saveCustomPlaces();
+  addMarker(newPlace);
+
+  updateAll(); 
+
+  closeForm();
+
+  document.getElementById('placeName').value = "";
+}
+
+// -------- INIT --------
+loadCustomPlaces();
+locations.forEach(addMarker);
+updateAll();
+
+</script>
+
+</body>
+</html>
